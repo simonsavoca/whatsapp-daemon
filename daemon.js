@@ -194,12 +194,19 @@ async function handleJoinGroup(payload, res) {
 }
 
 async function handleAuthStatus(res) {
-    const db = getDb();
-    const count = db.prepare('SELECT COUNT(*) AS n FROM messages').get().n;
+    let db = { connected: true, error: null };
+    let count = null;
+    try {
+        const conn = getDb();
+        count = conn.prepare('SELECT COUNT(*) AS n FROM messages').get().n;
+    } catch (e) {
+        db = { connected: false, error: e.message };
+    }
     sendJson(res, 200, {
         connectionState,
         user: lastUser,
         messageCount: count,
+        db,
     });
 }
 

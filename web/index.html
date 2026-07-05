@@ -13,7 +13,7 @@
 </header>
 
 <nav class="tabs">
-  <button class="tab-btn active" data-tab="statut">Statut &amp; connexion</button>
+  <button class="tab-btn active" data-tab="statut">Statut</button>
   <button class="tab-btn" data-tab="messages">Messages reçus</button>
   <button class="tab-btn" data-tab="db">Base de données</button>
   <button class="tab-btn" data-tab="api">Guide API</button>
@@ -28,6 +28,7 @@
         <dt>État</dt><dd id="st-state">—</dd>
         <dt>Compte</dt><dd id="st-user">—</dd>
         <dt>Messages en base</dt><dd id="st-count">—</dd>
+        <dt>Base de données</dt><dd id="st-db">—</dd>
         <dt>Dernière mise à jour</dt><dd id="st-updated">—</dd>
       </dl>
 
@@ -95,8 +96,7 @@
     <div class="card">
       <p class="api-intro">
         API HTTP interne du daemon, servie en local sur <code>127.0.0.1:3099</code> (non exposée à l'extérieur).
-        Consommée par les tools MCP <code>whatsapp_*</code> (<code>mcp-francis</code> et <code>mcp-francis-cowork</code>)
-        et par ce dashboard.
+        Consommée par les applications clientes du daemon et par ce dashboard.
       </p>
     </div>
 

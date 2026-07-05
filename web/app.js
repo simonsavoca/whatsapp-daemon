@@ -45,6 +45,9 @@ async function refreshStatus() {
     $('#st-state').textContent = s.connectionState;
     $('#st-user').textContent = s.user ? `${s.user.name} (${s.user.id})` : 'non connecté';
     $('#st-count').textContent = s.messageCount;
+    $('#st-db').innerHTML = s.db?.connected
+      ? '<span class="badge-read">connectée</span>'
+      : `<span class="badge-unread">erreur${s.db?.error ? ' — ' + esc(s.db.error) : ''}</span>`;
     $('#st-updated').textContent = new Date().toLocaleTimeString('fr-FR');
 
     const dot = $('#live-dot');
