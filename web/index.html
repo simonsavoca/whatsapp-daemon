@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Daemon WhatsApp — Contrôle</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>Daemon WhatsApp</h1>
+  <span id="live-dot" class="dot"></span>
+</header>
+
+<nav class="tabs">
+  <button class="tab-btn active" data-tab="statut">Statut &amp; connexion</button>
+  <button class="tab-btn" data-tab="messages">Messages reçus</button>
+  <button class="tab-btn" data-tab="db">Base de données</button>
+  <button class="tab-btn" data-tab="api">Guide API</button>
+</nav>
+
+<main>
+
+  <section id="tab-statut" class="tab-pane active">
+    <div class="card">
+      <h2>Connexion</h2>
+      <dl>
+        <dt>État</dt><dd id="st-state">—</dd>
+        <dt>Compte</dt><dd id="st-user">—</dd>
+        <dt>Messages en base</dt><dd id="st-count">—</dd>
+        <dt>Dernière mise à jour</dt><dd id="st-updated">—</dd>
+      </dl>
+
+      <div id="qr-block" class="qr-block" hidden>
+        <p>Scanner ce QR code avec WhatsApp mobile (Appareils liés → Lier un appareil) :</p>
+        <img id="qr-img" alt="QR code d'authentification WhatsApp">
+      </div>
+
+      <button id="btn-reset-auth" class="btn-danger" hidden>Réinitialiser l'authentification</button>
+    </div>
+  </section>
+
+  <section id="tab-messages" class="tab-pane">
+    <div class="card">
+      <h2>Messages reçus</h2>
+      <div class="toolbar">
+        <input id="msg-filter" type="text" placeholder="Filtrer (nom du chat ou texte)…">
+        <select id="msg-scope">
+          <option value="recent">Tous les récents</option>
+          <option value="unread">Non lus uniquement</option>
+        </select>
+        <button id="msg-refresh">Actualiser</button>
+      </div>
+      <table class="msg-table">
+        <thead>
+          <tr><th>Date</th><th>Chat</th><th>Type</th><th>Texte</th><th>Lu</th></tr>
+        </thead>
+        <tbody id="msg-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="tab-db" class="tab-pane">
+    <div class="card">
+      <h2>Table <code>chats</code></h2>
+      <div class="toolbar">
+        <input id="chat-filter" type="text" placeholder="Filtrer par nom…">
+        <button id="chat-refresh">Actualiser</button>
+      </div>
+      <table class="msg-table">
+        <thead><tr><th>Nom</th><th>JID</th><th>Groupe</th><th>Mis à jour</th></tr></thead>
+        <tbody id="chat-rows"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Table <code>messages</code></h2>
+      <div class="toolbar">
+        <input id="db-filter" type="text" placeholder="Filtrer (nom du chat ou texte)…">
+        <button id="db-prev">◀</button>
+        <span id="db-page-info">—</span>
+        <button id="db-next">▶</button>
+        <button id="db-refresh">Actualiser</button>
+      </div>
+      <table class="msg-table">
+        <thead>
+          <tr><th>ID</th><th>Date</th><th>Chat</th><th>Expéditeur</th><th>Type</th><th>Texte</th><th>Lu</th></tr>
+        </thead>
+        <tbody id="db-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="tab-api" class="tab-pane">
+    <div class="card">
+      <p class="api-intro">
+        API HTTP interne du daemon, servie en local sur <code>127.0.0.1:3099</code> (non exposée à l'extérieur).
+        Consommée par les tools MCP <code>whatsapp_*</code> (<code>mcp-francis</code> et <code>mcp-francis-cowork</code>)
+        et par ce dashboard.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>Authentification</h2>
+
+      <details class="api-route">
+        <summary><span class="method get">GET</span> /auth/status</summary>
+        <p>État de la connexion WhatsApp et du compte lié.</p>
+        <p><strong>Réponse</strong></p>
+        <pre><code>{ "connectionState": "open", "user": { "name": "...", "id": "..." }, "messageCount": 123 }</code></pre>
+      </details>
+
+      <details class="api-route">
+        <summary><span class="method get">GET</span> /auth/qr</summary>
+        <p>Dernier QR code d'authentification (data URL PNG), ou <code>null</code> si déjà connecté ou pas encore généré.</p>
+        <p><strong>Réponse</strong></p>
+        <pre><code>{ "qr": "data:image/png;base64,...", "connectionState": "connecting" }</code></pre>
+      </details>
+
+      <details class="api-route">
+        <summary><span class="method post">POST</span> /auth/reset</summary>
+        <p><strong>Destructif</strong> — supprime la session WhatsApp en cours et redémarre la connexion pour générer un nouveau QR à scanner.</p>
+        <p><strong>Réponse</strong></p>
+        <pre><code>{ "ok": true }</code></pre>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2>Envoi &amp; groupes</h2>
+
+      <details class="api-route">
+        <summary><span class="method post">POST</span> /send</summary>
+        <p><strong>Visible sur WhatsApp mobile</strong> — envoie un message à un contact/groupe recherché par nom (sous-chaîne, insensible à la casse).</p>
+        <p><strong>Corps</strong></p>
+        <pre><code>{ "query": "Virginie", "message": "Coucou" }</code></pre>
+        <p><strong>Réponse</strong></p>
+        <pre><code>{ "ok": true, "msg": "Message envoyé à \"Virginie\"", "jid": "..." }
+// 409 si plusieurs correspondances : { "error": "...", "matches": [{ "name", "jid", "isGroup" }] }</code></pre>
+      </details>
+
+      <details class="api-route">
+        <summary><span class="method post">POST</span> /join-group</summary>
+        <p>Rejoint un groupe WhatsApp via un lien d'invitation.</p>
+        <p><strong>Corps</strong></p>
+        <pre><code>{ "inviteLink": "https://chat.whatsapp.com/CODE" }</code></pre>
+        <p><strong>Réponse</strong></p>
+        <pre><code>{ "ok": true, "jid": "..." }</code></pre>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2>Messages</h2>
+
+      <details class="api-route">
+        <summary><span class="method get">GET</span> /messages/recent?limit&amp;filter</summary>
+        <p>Derniers messages capturés par le daemon. <code>limit</code> (défaut 20) et <code>filter</code> (nom du chat ou texte) optionnels.</p>
+        <p><strong>Réponse</strong></p>
+        <pre><code>{ "messages": [ { "id", "chat_name", "text", "timestamp", "read_at", ... } ] }</code></pre>
+      </details>
+
+      <details class="api-route">
+        <summary><span class="method get">GET</span> /messages/unread</summary>
+        <p>Messages non lus (basé sur <code>read_at</code> en base).</p>
+        <p><strong>Réponse</strong></p>
+        <pre><code>{ "messages": [ ... ] }</code></pre>
+      </details>
+
+      <details class="api-route">
+        <summary><span class="method post">POST</span> /messages/read</summary>
+        <p><strong>Irréversible</strong> — marque des messages comme lus (ticks bleus, visible sur tous les appareils). Passer <code>ids</code> pour ne marquer que des messages précis, sinon <code>upTo</code> marque tout jusqu'à ce timestamp (défaut : maintenant).</p>
+        <p><strong>Corps</strong></p>
+        <pre><code>{ "ids": [12, 13] }  // ou : { "upTo": "2026-07-05T10:00:00.000Z" }</code></pre>
+        <p><strong>Réponse</strong></p>
+        <pre><code>{ "ok": true, "count": 2 }</code></pre>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2>Base de données (lecture seule)</h2>
+
+      <details class="api-route">
+        <summary><span class="method get">GET</span> /db/chats?filter</summary>
+        <p>Table <code>chats</code>, triée par dernière mise à jour. <code>filter</code> optionnel (nom).</p>
+        <p><strong>Réponse</strong></p>
+        <pre><code>{ "chats": [ { "jid", "name", "is_group", "updated_at" } ] }</code></pre>
+      </details>
+
+      <details class="api-route">
+        <summary><span class="method get">GET</span> /db/messages?limit&amp;offset&amp;filter</summary>
+        <p>Table <code>messages</code> paginée (<code>limit</code> défaut 50, <code>offset</code> défaut 0). <code>filter</code> optionnel (nom du chat ou texte).</p>
+        <p><strong>Réponse</strong></p>
+        <pre><code>{ "messages": [ ... ], "total": 431 }</code></pre>
+      </details>
+    </div>
+  </section>
+
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>
