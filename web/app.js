@@ -1,5 +1,6 @@
-// Dashboard de contrôle du daemon WhatsApp — lecture seule, à une exception près :
-// le bouton de réinitialisation de l'authentification (POST /auth/reset).
+// Dashboard de contrôle du daemon WhatsApp — lecture seule, à deux exceptions près :
+// le bouton de réinitialisation de l'authentification (POST /auth/reset)
+// et le bouton de réinitialisation de la base de données (POST /db/reset).
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -108,6 +109,26 @@ $('#btn-reset-auth').addEventListener('click', async () => {
     if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
     setPollInterval(2000);
     refreshStatus();
+  } catch (e) {
+    alert(`Erreur lors du reset : ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('#btn-reset-db').addEventListener('click', async () => {
+  if (!confirm("Réinitialiser la base de données ? Tous les messages et chats enregistrés seront définitivement supprimés. La session WhatsApp authentifiée n'est pas affectée.")) return;
+  const btn = $('#btn-reset-db');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/db/reset', { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    refreshStatus();
+    refreshMessages();
+    refreshChats();
+    dbOffset = 0;
+    refreshDbMessages();
   } catch (e) {
     alert(`Erreur lors du reset : ${e.message}`);
   } finally {

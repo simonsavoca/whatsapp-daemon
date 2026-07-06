@@ -37,7 +37,10 @@
         <img id="qr-img" alt="QR code d'authentification WhatsApp">
       </div>
 
-      <button id="btn-reset-auth" class="btn-danger" hidden>Réinitialiser l'authentification</button>
+      <div class="btn-row">
+        <button id="btn-reset-auth" class="btn-danger" hidden>Réinitialiser l'authentification</button>
+        <button id="btn-reset-db" class="btn-danger">Réinitialiser la base de données</button>
+      </div>
     </div>
   </section>
 
@@ -176,7 +179,7 @@
     </div>
 
     <div class="card">
-      <h2>Base de données (lecture seule)</h2>
+      <h2>Base de données</h2>
 
       <details class="api-route">
         <summary><span class="method get">GET</span> /db/chats?filter</summary>
@@ -190,6 +193,13 @@
         <p>Table <code>messages</code> paginée (<code>limit</code> défaut 50, <code>offset</code> défaut 0). <code>filter</code> optionnel (nom du chat ou texte).</p>
         <p><strong>Réponse</strong></p>
         <pre><code>{ "messages": [ ... ], "total": 431 }</code></pre>
+      </details>
+
+      <details class="api-route">
+        <summary><span class="method post">POST</span> /db/reset</summary>
+        <p><strong>Destructif</strong> — vide les tables <code>messages</code> et <code>chats</code> (le fichier whatsapp.db et son schéma sont conservés). N'affecte pas la session WhatsApp authentifiée.</p>
+        <p><strong>Réponse</strong></p>
+        <pre><code>{ "ok": true }</code></pre>
       </details>
     </div>
   </section>

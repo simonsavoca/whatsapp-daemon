@@ -11,6 +11,7 @@ const {
     useMultiFileAuthState,
     DisconnectReason,
     fetchLatestBaileysVersion,
+    areJidsSameUser,
 } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode-terminal');
@@ -214,6 +215,21 @@ async function handleAuthQr(res) {
     sendJson(res, 200, { qr: latestQr, connectionState });
 }
 
+async function handleDbReset(res) {
+    try {
+        const db = getDb();
+        const run = db.transaction(() => {
+            db.prepare('DELETE FROM messages').run();
+            db.prepare('DELETE FROM chats').run();
+        });
+        run();
+        for (const key of Object.keys(nameCache)) delete nameCache[key];
+        sendJson(res, 200, { ok: true });
+    } catch (e) {
+        sendJson(res, 500, { error: e.message });
+    }
+}
+
 async function handleAuthReset(res) {
     if (isResetting) return sendJson(res, 409, { error: 'Reset déjà en cours.' });
     isResetting = true;
@@ -315,6 +331,9 @@ const ipcServer = http.createServer(async (req, res) => {
         }
         if (req.method === 'POST' && url.pathname === '/auth/reset') {
             return await handleAuthReset(res);
+        }
+        if (req.method === 'POST' && url.pathname === '/db/reset') {
+            return await handleDbReset(res);
         }
         if (req.method === 'GET' && url.pathname === '/db/chats') {
             return await handleDbChats(Object.fromEntries(url.searchParams), res);
@@ -422,8 +441,40 @@ async function connect() {
         for (const u of updates) {
             if (u.id && u.unreadCount === 0) {
                 const info = markRead.run(now, u.id);
+                console.log(`[SYNC] chats.update ${u.id} -> ${info.changes} message(s) marqué(s) lu(s)`);
+            }
+        }
+    });
+
+    // Chats 1:1 : Baileys émet un statut READ par message quand il est lu sur un autre appareil lié.
+    sock.ev.on('messages.update', (updates) => {
+        const db = getDb();
+        const markRead = db.prepare(`UPDATE messages SET read_at = ? WHERE wa_id = ? AND read_at IS NULL`);
+        const now = new Date().toISOString();
+        for (const { key, update } of updates) {
+            if (key.id && update.status === 4 && !key.fromMe) {
+                const info = markRead.run(now, key.id);
                 if (info.changes > 0) {
-                    console.log(`[SYNC] ${info.changes} message(s) marqué(s) lu(s) (autre appareil) — ${u.id}`);
+                    console.log(`[SYNC] message ${key.id} marqué lu (autre appareil) — 1:1`);
+                }
+            }
+        }
+    });
+
+    // Groupes : les accusés de lecture passent par message-receipt.update (un par participant),
+    // il faut filtrer sur les accusés provenant de notre propre compte (autre appareil lié).
+    sock.ev.on('message-receipt.update', (updates) => {
+        const db = getDb();
+        const markRead = db.prepare(`UPDATE messages SET read_at = ? WHERE wa_id = ? AND read_at IS NULL`);
+        const me = state.creds.me;
+        const selfJids = [me?.id, me?.lid, me?.phoneNumber].filter(Boolean);
+        for (const { key, receipt } of updates) {
+            if (!key.id || key.fromMe || !receipt.userJid || !receipt.readTimestamp) continue;
+            if (selfJids.some(jid => areJidsSameUser(jid, receipt.userJid))) {
+                const now = new Date(Number(receipt.readTimestamp) * 1000).toISOString();
+                const info = markRead.run(now, key.id);
+                if (info.changes > 0) {
+                    console.log(`[SYNC] message ${key.id} marqué lu (autre appareil) — groupe`);
                 }
             }
         }

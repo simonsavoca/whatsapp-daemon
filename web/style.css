@@ -133,8 +133,14 @@ table.msg-table {
   border-radius: 8px;
 }
 
-.btn-danger {
+.btn-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
   margin-top: 16px;
+}
+
+.btn-danger {
   background: none;
   border: 1px solid var(--danger);
   color: var(--danger);
