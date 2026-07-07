@@ -45,7 +45,11 @@ async function refreshStatus() {
     const s = await getJson('/auth/status');
     $('#st-state').textContent = s.connectionState;
     $('#st-user').textContent = s.user ? `${s.user.name} (${s.user.id})` : 'non connecté';
-    $('#st-count').textContent = s.messageCount;
+    $('#stat-total').textContent = s.messageCount ?? '—';
+    $('#stat-read').textContent = s.readCount ?? '—';
+    $('#stat-unread').textContent = s.unreadCount ?? '—';
+    $('#stat-chats').textContent = s.chatsCount ?? '—';
+    $('#stat-active-chats').textContent = s.activeChatsCount ?? '—';
     $('#st-db').innerHTML = s.db?.connected
       ? '<span class="badge-read">connectée</span>'
       : `<span class="badge-unread">erreur${s.db?.error ? ' — ' + esc(s.db.error) : ''}</span>`;
@@ -99,7 +103,7 @@ async function refreshAuthUi(connectionState) {
 }
 
 $('#btn-reset-auth').addEventListener('click', async () => {
-  if (!confirm("Réinitialiser l'authentification WhatsApp ? La session actuelle sera invalidée, il faudra scanner un nouveau QR code.")) return;
+  if (!confirm("Réinitialiser l'authentification WhatsApp ? La session actuelle sera invalidée (nouveau QR code à scanner) ET la base de données (messages/chats) sera vidée.")) return;
   const btn = $('#btn-reset-auth');
   btn.disabled = true;
   btn.hidden = true;

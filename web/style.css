@@ -73,6 +73,16 @@ dl { display: grid; grid-template-columns: 160px 1fr; row-gap: 8px; margin: 0; }
 dt { color: var(--muted); }
 dd { margin: 0; }
 
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 16px;
+}
+.stat-item { text-align: center; }
+.stat-value { font-size: 28px; font-weight: 700; line-height: 1.2; }
+.stat-value-unread { color: var(--danger); }
+.stat-label { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
 .toolbar {
   display: flex;
   gap: 8px;

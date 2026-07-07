@@ -23,11 +23,21 @@
 
   <section id="tab-statut" class="tab-pane active">
     <div class="card">
+      <h2>Statistiques</h2>
+      <div class="stat-grid">
+        <div class="stat-item"><div class="stat-value" id="stat-total">—</div><div class="stat-label">Messages au total</div></div>
+        <div class="stat-item"><div class="stat-value" id="stat-read">—</div><div class="stat-label">Lus</div></div>
+        <div class="stat-item"><div class="stat-value stat-value-unread" id="stat-unread">—</div><div class="stat-label">Non lus</div></div>
+        <div class="stat-item"><div class="stat-value" id="stat-chats">—</div><div class="stat-label">Contacts synchronisés</div></div>
+        <div class="stat-item"><div class="stat-value" id="stat-active-chats">—</div><div class="stat-label">Conversations actives</div></div>
+      </div>
+    </div>
+
+    <div class="card">
       <h2>Connexion</h2>
       <dl>
         <dt>État</dt><dd id="st-state">—</dd>
         <dt>Compte</dt><dd id="st-user">—</dd>
-        <dt>Messages en base</dt><dd id="st-count">—</dd>
         <dt>Base de données</dt><dd id="st-db">—</dd>
         <dt>Dernière mise à jour</dt><dd id="st-updated">—</dd>
       </dl>
@@ -110,7 +120,7 @@
         <summary><span class="method get">GET</span> /auth/status</summary>
         <p>État de la connexion WhatsApp et du compte lié.</p>
         <p><strong>Réponse</strong></p>
-        <pre><code>{ "connectionState": "open", "user": { "name": "...", "id": "..." }, "messageCount": 123 }</code></pre>
+        <pre><code>{ "connectionState": "open", "user": { "name": "...", "id": "..." }, "messageCount": 123, "unreadCount": 4, "readCount": 119, "chatsCount": 89, "activeChatsCount": 12 }</code></pre>
       </details>
 
       <details class="api-route">
@@ -122,7 +132,7 @@
 
       <details class="api-route">
         <summary><span class="method post">POST</span> /auth/reset</summary>
-        <p><strong>Destructif</strong> — supprime la session WhatsApp en cours et redémarre la connexion pour générer un nouveau QR à scanner.</p>
+        <p><strong>Destructif</strong> — supprime la session WhatsApp en cours, vide la base (<code>messages</code>/<code>chats</code>) et redémarre la connexion pour générer un nouveau QR à scanner.</p>
         <p><strong>Réponse</strong></p>
         <pre><code>{ "ok": true }</code></pre>
       </details>

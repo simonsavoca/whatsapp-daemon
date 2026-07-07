@@ -70,6 +70,77 @@ function upsertChat(db, jid, name) {
     `).run(jid, name, jid.endsWith('@g.us') ? 1 : 0, new Date().toISOString());
 }
 
+// Utilisé par contacts.set, contacts.update ET messaging-history.set (rattrapage après coupure).
+function applyContact(db, c) {
+    const name = c.name || c.notify;
+    if (name && c.id) {
+        nameCache[c.id] = name;
+        upsertChat(db, c.id, name);
+    }
+}
+
+// Marque comme lus les messages d'un chat si son unreadCount est tombé à 0.
+// Utilisé par chats.update ET messaging-history.set.
+function markChatReadIfZero(db, markReadStmt, chat) {
+    if (chat.id && chat.unreadCount === 0) {
+        const now = new Date().toISOString();
+        return markReadStmt.run(now, chat.id).changes;
+    }
+    return 0;
+}
+
+// Insère en base les messages reçus (temps réel via messages.upsert OU rattrapage via
+// messaging-history.set après une coupure). Dédoublonné par wa_id (UNIQUE + INSERT OR IGNORE).
+function insertMessages(sock, db, messages, { log = false } = {}) {
+    if (!messages || !messages.length) return 0;
+    const insert = db.prepare(`
+        INSERT OR IGNORE INTO messages (wa_id, jid, chat_name, sender, message_type, text, raw_key, from_me, timestamp, read_at)
+        VALUES (@wa_id, @jid, @chat_name, @sender, @message_type, @text, @raw_key, @from_me, @timestamp, @read_at)
+    `);
+    let inserted = 0;
+    const run = db.transaction((msgs) => {
+        for (const msg of msgs) {
+            const from = msg.key.remoteJid;
+            if (!from) continue;
+            const { type: msgType, text } = messageTypeAndText(msg.message);
+            const t = msg.messageTimestamp
+                ? new Date(Number(msg.messageTimestamp) * 1000).toISOString()
+                : new Date().toISOString();
+            const name = nameCache[from] || msg.pushName || from.split('@')[0];
+            if (from.endsWith('@g.us') && !nameCache[from]) {
+                sock.groupMetadata(from)
+                    .then(meta => { nameCache[from] = meta.subject; upsertChat(db, from, meta.subject); })
+                    .catch(() => { nameCache[from] = from; });
+            } else if (!from.endsWith('@g.us')) {
+                upsertChat(db, from, name);
+            }
+            const sender = msg.pushName || msg.key.participant?.split('@')[0] || '';
+
+            const info = insert.run({
+                wa_id: msg.key.id || null,
+                jid: from,
+                chat_name: name,
+                sender,
+                message_type: msgType,
+                text,
+                raw_key: JSON.stringify(msg.key),
+                from_me: msg.key.fromMe ? 1 : 0,
+                timestamp: t,
+                read_at: msg.key.fromMe ? t : null,
+            });
+
+            if (info.changes > 0) {
+                inserted++;
+                if (log && !msg.key.fromMe) {
+                    console.log(`[${name}] ${msgType === 'text' ? text : `(${msgType}) ${text}`}`);
+                }
+            }
+        }
+    });
+    run(messages);
+    return inserted;
+}
+
 // ---------------------------------------------------------------------------
 // API HTTP — seul point d'accès aux données/actions WhatsApp pour le reste du système
 // ---------------------------------------------------------------------------
@@ -141,10 +212,49 @@ async function handleMessagesRead(payload, res) {
     }
 }
 
+// Détecte si query ressemble à un numéro de téléphone plutôt qu'à un nom
+// (espaces/tirets/parenthèses tolérés, +/00 en préfixe international).
+function isPhoneQuery(query) {
+    const cleaned = query.replace(/[\s\-().]/g, '');
+    return /^\+?\d{7,15}$/.test(cleaned);
+}
+
+function normalizePhone(query) {
+    let cleaned = query.replace(/[\s\-().]/g, '');
+    if (cleaned.startsWith('00')) cleaned = cleaned.slice(2);
+    if (cleaned.startsWith('+')) cleaned = cleaned.slice(1);
+    return cleaned;
+}
+
+// Envoi à un numéro jamais contacté : on vérifie via onWhatsApp avant d'envoyer
+// à l'aveugle, car WhatsApp peut renvoyer un JID différent du numéro brut (@lid).
+async function handleSendToPhone(query, message, res) {
+    const number = normalizePhone(query);
+    try {
+        const [result] = await currentSock.onWhatsApp(number);
+        if (!result?.exists) {
+            return sendJson(res, 404, { error: `Le numéro "${query}" n'est pas sur WhatsApp.` });
+        }
+        const jid = result.jid;
+        await currentSock.sendMessage(jid, { text: message });
+        const db = getDb();
+        // Ne pas écraser le nom d'un contact qui a déjà écrit par le numéro brut
+        const existing = db.prepare('SELECT name FROM chats WHERE jid = ?').get(jid);
+        if (!existing) upsertChat(db, jid, number);
+        sendJson(res, 200, { ok: true, msg: `Message envoyé à "${number}"`, jid });
+    } catch (e) {
+        sendJson(res, 500, { error: e.message });
+    }
+}
+
 async function handleSend(payload, res) {
     if (!currentSock) return sendJson(res, 503, { error: 'daemon not connected' });
     const { query, message } = payload;
     if (!query || !message) return sendJson(res, 400, { error: 'query et message requis' });
+
+    if (isPhoneQuery(query)) {
+        return handleSendToPhone(query, message, res);
+    }
 
     const db = getDb();
     const kw = `%${query.toLowerCase()}%`;
@@ -196,10 +306,15 @@ async function handleJoinGroup(payload, res) {
 
 async function handleAuthStatus(res) {
     let db = { connected: true, error: null };
-    let count = null;
+    let count = null, unreadCount = null, chatsCount = null, activeChatsCount = null;
     try {
         const conn = getDb();
         count = conn.prepare('SELECT COUNT(*) AS n FROM messages').get().n;
+        unreadCount = conn.prepare('SELECT COUNT(*) AS n FROM messages WHERE read_at IS NULL').get().n;
+        // chatsCount inclut tous les contacts synchronisés (carnet d'adresses WhatsApp),
+        // pas seulement ceux avec qui une conversation a réellement eu lieu — d'où activeChatsCount.
+        chatsCount = conn.prepare('SELECT COUNT(*) AS n FROM chats').get().n;
+        activeChatsCount = conn.prepare('SELECT COUNT(DISTINCT jid) AS n FROM messages').get().n;
     } catch (e) {
         db = { connected: false, error: e.message };
     }
@@ -207,6 +322,10 @@ async function handleAuthStatus(res) {
         connectionState,
         user: lastUser,
         messageCount: count,
+        unreadCount,
+        readCount: count != null && unreadCount != null ? count - unreadCount : null,
+        chatsCount,
+        activeChatsCount,
         db,
     });
 }
@@ -215,21 +334,28 @@ async function handleAuthQr(res) {
     sendJson(res, 200, { qr: latestQr, connectionState });
 }
 
+function resetDb() {
+    const db = getDb();
+    const run = db.transaction(() => {
+        db.prepare('DELETE FROM messages').run();
+        db.prepare('DELETE FROM chats').run();
+    });
+    run();
+    for (const key of Object.keys(nameCache)) delete nameCache[key];
+}
+
 async function handleDbReset(res) {
     try {
-        const db = getDb();
-        const run = db.transaction(() => {
-            db.prepare('DELETE FROM messages').run();
-            db.prepare('DELETE FROM chats').run();
-        });
-        run();
-        for (const key of Object.keys(nameCache)) delete nameCache[key];
+        resetDb();
         sendJson(res, 200, { ok: true });
     } catch (e) {
         sendJson(res, 500, { error: e.message });
     }
 }
 
+// Un reset d'auth relie un nouvel appareil, ce qui redéclenche une synchro complète
+// (messaging-history.set) et re-remplirait la base avec l'ancien historique/contacts.
+// On vide donc aussi messages/chats pour repartir sur une base cohérente avec la nouvelle session.
 async function handleAuthReset(res) {
     if (isResetting) return sendJson(res, 409, { error: 'Reset déjà en cours.' });
     isResetting = true;
@@ -242,6 +368,7 @@ async function handleAuthReset(res) {
             currentSock = null;
         }
         if (fs.existsSync(AUTH_DIR)) fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+        resetDb();
         connectionState = 'connecting';
         lastUser = null;
         latestQr = null;
@@ -374,6 +501,15 @@ async function connect() {
         version,
         auth: state,
         browser: ['MAIA', 'Chrome', '1.0'],
+        // Demande un rattrapage d'historique complet plutôt que le seul dernier message par chat.
+        // Note : ce flag est envoyé au serveur lors du pairing (registration) — sur une session
+        // déjà appairée, WhatsApp peut ne pas revenir en arrière pour autant. La ligne suivante
+        // est le levier qui compte vraiment côté client :
+        syncFullHistory: true,
+        // Par défaut Baileys ignore silencieusement les paquets d'historique de type FULL
+        // (cf. node_modules/@whiskeysockets/baileys/lib/Defaults/index.js — c'est probablement
+        // la cause directe du "1 message par chat" observé). On les autorise tous ici pour l'essai.
+        shouldSyncHistoryMessage: () => true,
     });
     currentSock = sock;
 
@@ -413,23 +549,11 @@ async function connect() {
 
     sock.ev.on('contacts.set', ({ contacts }) => {
         const db = getDb();
-        for (const c of contacts) {
-            const name = c.name || c.notify;
-            if (name && c.id) {
-                nameCache[c.id] = name;
-                upsertChat(db, c.id, name);
-            }
-        }
+        for (const c of contacts) applyContact(db, c);
     });
     sock.ev.on('contacts.update', (updates) => {
         const db = getDb();
-        for (const c of updates) {
-            const name = c.name || c.notify;
-            if (name && c.id) {
-                nameCache[c.id] = name;
-                upsertChat(db, c.id, name);
-            }
-        }
+        for (const c of updates) applyContact(db, c);
     });
 
     sock.ev.on('chats.update', (updates) => {
@@ -437,13 +561,37 @@ async function connect() {
         const markRead = db.prepare(
             `UPDATE messages SET read_at = ? WHERE jid = ? AND read_at IS NULL`
         );
-        const now = new Date().toISOString();
         for (const u of updates) {
-            if (u.id && u.unreadCount === 0) {
-                const info = markRead.run(now, u.id);
-                console.log(`[SYNC] chats.update ${u.id} -> ${info.changes} message(s) marqué(s) lu(s)`);
+            const changes = markChatReadIfZero(db, markRead, u);
+            if (changes > 0) {
+                console.log(`[SYNC] chats.update ${u.id} -> ${changes} message(s) marqué(s) lu(s)`);
             }
         }
+    });
+
+    // Rattrapage après coupure : Baileys délivre ici en bloc les chats/contacts/messages
+    // manqués pendant que le daemon était arrêté (au lieu de messages.upsert au fil de l'eau).
+    // Sans ce handler, tout ce qui arrive par ce canal était jusqu'ici silencieusement perdu.
+    sock.ev.on('messaging-history.set', ({ chats, contacts, messages, isLatest, syncType }) => {
+        const db = getDb();
+
+        for (const c of contacts || []) applyContact(db, c);
+
+        const markRead = db.prepare(`UPDATE messages SET read_at = ? WHERE jid = ? AND read_at IS NULL`);
+        let markedRead = 0;
+        for (const chat of chats || []) {
+            if (chat.name) upsertChat(db, chat.id, chat.name);
+            markedRead += markChatReadIfZero(db, markRead, chat);
+        }
+
+        const inserted = insertMessages(sock, db, messages, { log: false });
+
+        console.log(
+            `[SYNC] messaging-history.set (type=${syncType ?? '?'}) : ` +
+            `${chats?.length || 0} chat(s), ${contacts?.length || 0} contact(s), ` +
+            `${inserted} message(s) rattrapé(s), ${markedRead} marqué(s) lu(s)` +
+            `${isLatest ? ' [dernier lot]' : ''}`
+        );
     });
 
     // Chats 1:1 : Baileys émet un statut READ par message quand il est lu sur un autre appareil lié.
@@ -483,43 +631,7 @@ async function connect() {
     sock.ev.on('messages.upsert', ({ messages, type }) => {
         if (type !== 'notify' && type !== 'append') return;
         const db = getDb();
-        const insert = db.prepare(`
-            INSERT OR IGNORE INTO messages (wa_id, jid, chat_name, sender, message_type, text, raw_key, from_me, timestamp, read_at)
-            VALUES (@wa_id, @jid, @chat_name, @sender, @message_type, @text, @raw_key, @from_me, @timestamp, @read_at)
-        `);
-        for (const msg of messages) {
-            const from = msg.key.remoteJid;
-            const { type: msgType, text } = messageTypeAndText(msg.message);
-            const t = msg.messageTimestamp
-                ? new Date(Number(msg.messageTimestamp) * 1000).toISOString()
-                : new Date().toISOString();
-            const name = nameCache[from] || msg.pushName || from.split('@')[0];
-            if (from.endsWith('@g.us') && !nameCache[from]) {
-                sock.groupMetadata(from)
-                    .then(meta => { nameCache[from] = meta.subject; upsertChat(db, from, meta.subject); })
-                    .catch(() => { nameCache[from] = from; });
-            } else if (!from.endsWith('@g.us')) {
-                upsertChat(db, from, name);
-            }
-            const sender = msg.pushName || msg.key.participant?.split('@')[0] || '';
-
-            insert.run({
-                wa_id: msg.key.id || null,
-                jid: from,
-                chat_name: name,
-                sender,
-                message_type: msgType,
-                text,
-                raw_key: JSON.stringify(msg.key),
-                from_me: msg.key.fromMe ? 1 : 0,
-                timestamp: t,
-                read_at: msg.key.fromMe ? t : null,
-            });
-
-            if (!msg.key.fromMe) {
-                console.log(`[${name}] ${msgType === 'text' ? text : `(${msgType}) ${text}`}`);
-            }
-        }
+        insertMessages(sock, db, messages, { log: true });
     });
 
     return sock;
