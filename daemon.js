@@ -19,8 +19,17 @@ const QRCode = require('qrcode');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
-const { getDb } = require('./db');
+const { getDb, getSetting } = require('./db');
 const { migrate } = require('./migrate');
+const {
+    ensureBootstrapSecrets,
+    verifyPassword,
+    renewApiToken,
+    createSessionCookie,
+    verifySessionCookie,
+    getSessionCookie,
+    checkBearer,
+} = require('./auth');
 
 const DATA_DIR = path.join(__dirname, 'data');
 const AUTH_DIR = path.join(DATA_DIR, 'whatsapp_auth');
@@ -304,6 +313,45 @@ async function handleJoinGroup(payload, res) {
     }
 }
 
+async function handleLogin(body, res) {
+    const { password } = body;
+    if (!password) return sendJson(res, 400, { error: 'password required' });
+
+    const passwordHash = getSetting('password_hash');
+    if (!passwordHash) return sendJson(res, 500, { error: 'password not configured' });
+
+    try {
+        if (!verifyPassword(password, passwordHash)) {
+            return sendJson(res, 401, { error: 'unauthorized' });
+        }
+        const cookie = createSessionCookie();
+        res.writeHead(200, {
+            'Content-Type': 'application/json',
+            'Set-Cookie': `sid=${cookie}; Path=/; HttpOnly; SameSite=Strict`,
+        });
+        res.end(JSON.stringify({ ok: true }));
+    } catch (e) {
+        sendJson(res, 500, { error: e.message });
+    }
+}
+
+async function handleLogout(res) {
+    res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Set-Cookie': 'sid=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0',
+    });
+    res.end(JSON.stringify({ ok: true }));
+}
+
+async function handleRenewToken(res) {
+    try {
+        const token = renewApiToken();
+        sendJson(res, 200, { token });
+    } catch (e) {
+        sendJson(res, 500, { error: e.message });
+    }
+}
+
 async function handleAuthStatus(res) {
     let db = { connected: true, error: null };
     let count = null, unreadCount = null, chatsCount = null, activeChatsCount = null;
@@ -326,6 +374,7 @@ async function handleAuthStatus(res) {
         readCount: count != null && unreadCount != null ? count - unreadCount : null,
         chatsCount,
         activeChatsCount,
+        apiToken: getSetting('api_token'),
         db,
     });
 }
@@ -423,15 +472,26 @@ async function handleDbMessages(query, res) {
 }
 
 const STATIC_FILES = {
-    '/': { file: 'index.html', type: 'text/html; charset=utf-8' },
-    '/index.html': { file: 'index.html', type: 'text/html; charset=utf-8' },
-    '/app.js': { file: 'app.js', type: 'application/javascript; charset=utf-8' },
-    '/style.css': { file: 'style.css', type: 'text/css; charset=utf-8' },
+    '/': { file: 'index.html', type: 'text/html; charset=utf-8', requireSession: true },
+    '/index.html': { file: 'index.html', type: 'text/html; charset=utf-8', requireSession: true },
+    '/app.js': { file: 'app.js', type: 'application/javascript; charset=utf-8', requireSession: true },
+    '/style.css': { file: 'style.css', type: 'text/css; charset=utf-8', requireSession: true },
+    '/login': { file: 'login.html', type: 'text/html; charset=utf-8', public: true },
 };
 
-function serveStatic(pathname, res) {
+function serveStatic(pathname, res, req) {
     const entry = STATIC_FILES[pathname];
     if (!entry) return false;
+
+    if (!entry.public && entry.requireSession) {
+        const sessionCookie = getSessionCookie(req);
+        if (!sessionCookie || !verifySessionCookie(sessionCookie)) {
+            res.writeHead(302, { Location: '/login' });
+            res.end();
+            return true;
+        }
+    }
+
     const filePath = path.join(WEB_DIR, entry.file);
     fs.readFile(filePath, (err, data) => {
         if (err) return sendJson(res, 500, { error: err.message });
@@ -444,42 +504,105 @@ function serveStatic(pathname, res) {
 const ipcServer = http.createServer(async (req, res) => {
     try {
         const url = new URL(req.url, 'http://127.0.0.1');
-        if (req.method === 'GET' && url.pathname === '/messages/recent') {
+        const pathname = url.pathname;
+
+        // Routes publiques (pas d'authentification requise)
+        if (req.method === 'GET' && pathname === '/login') {
+            return serveStatic(pathname, res, req);
+        }
+        if (req.method === 'POST' && pathname === '/login') {
+            const body = await readBody(req);
+            return await handleLogin(body, res);
+        }
+        if (req.method === 'POST' && pathname === '/logout') {
+            return await handleLogout(res);
+        }
+
+        // Routes d'API — Bearer token OU session
+        if (req.method === 'GET' && pathname === '/messages/recent') {
+            if (!checkBearer(req) && (!getSessionCookie(req) || !verifySessionCookie(getSessionCookie(req)))) {
+                return sendJson(res, 401, { error: 'unauthorized' });
+            }
             return await handleRecent(Object.fromEntries(url.searchParams), res);
         }
-        if (req.method === 'GET' && url.pathname === '/messages/unread') {
+        if (req.method === 'GET' && pathname === '/messages/unread') {
+            if (!checkBearer(req) && (!getSessionCookie(req) || !verifySessionCookie(getSessionCookie(req)))) {
+                return sendJson(res, 401, { error: 'unauthorized' });
+            }
             return await handleUnread(res);
         }
-        if (req.method === 'GET' && url.pathname === '/auth/status') {
+        if (req.method === 'POST' && pathname === '/messages/read') {
+            if (!checkBearer(req) && (!getSessionCookie(req) || !verifySessionCookie(getSessionCookie(req)))) {
+                return sendJson(res, 401, { error: 'unauthorized' });
+            }
+            const body = await readBody(req);
+            return await handleMessagesRead(body, res);
+        }
+        if (req.method === 'POST' && pathname === '/send') {
+            if (!checkBearer(req)) return sendJson(res, 401, { error: 'unauthorized' });
+            const body = await readBody(req);
+            return await handleSend(body, res);
+        }
+        if (req.method === 'POST' && pathname === '/join-group') {
+            if (!checkBearer(req)) return sendJson(res, 401, { error: 'unauthorized' });
+            const body = await readBody(req);
+            return await handleJoinGroup(body, res);
+        }
+        if (req.method === 'GET' && pathname === '/auth/status') {
+            if (!checkBearer(req) && (!getSessionCookie(req) || !verifySessionCookie(getSessionCookie(req)))) {
+                return sendJson(res, 401, { error: 'unauthorized' });
+            }
             return await handleAuthStatus(res);
         }
-        if (req.method === 'GET' && url.pathname === '/auth/qr') {
-            return await handleAuthQr(res);
-        }
-        if (req.method === 'POST' && url.pathname === '/auth/reset') {
+        if (req.method === 'POST' && pathname === '/auth/reset') {
+            if (!checkBearer(req) && (!getSessionCookie(req) || !verifySessionCookie(getSessionCookie(req)))) {
+                return sendJson(res, 401, { error: 'unauthorized' });
+            }
             return await handleAuthReset(res);
         }
-        if (req.method === 'POST' && url.pathname === '/db/reset') {
+
+        // Routes du dashboard — session uniquement
+        if (req.method === 'GET' && pathname === '/auth/qr') {
+            const sessionCookie = getSessionCookie(req);
+            if (!sessionCookie || !verifySessionCookie(sessionCookie)) {
+                return sendJson(res, 401, { error: 'unauthorized' });
+            }
+            return await handleAuthQr(res);
+        }
+        if (req.method === 'POST' && pathname === '/db/reset') {
+            const sessionCookie = getSessionCookie(req);
+            if (!sessionCookie || !verifySessionCookie(sessionCookie)) {
+                return sendJson(res, 401, { error: 'unauthorized' });
+            }
             return await handleDbReset(res);
         }
-        if (req.method === 'GET' && url.pathname === '/db/chats') {
+        if (req.method === 'GET' && pathname === '/db/chats') {
+            const sessionCookie = getSessionCookie(req);
+            if (!sessionCookie || !verifySessionCookie(sessionCookie)) {
+                return sendJson(res, 401, { error: 'unauthorized' });
+            }
             return await handleDbChats(Object.fromEntries(url.searchParams), res);
         }
-        if (req.method === 'GET' && url.pathname === '/db/messages') {
+        if (req.method === 'GET' && pathname === '/db/messages') {
+            const sessionCookie = getSessionCookie(req);
+            if (!sessionCookie || !verifySessionCookie(sessionCookie)) {
+                return sendJson(res, 401, { error: 'unauthorized' });
+            }
             return await handleDbMessages(Object.fromEntries(url.searchParams), res);
         }
-        if (req.method === 'POST' && url.pathname === '/messages/read') {
-            return await handleMessagesRead(await readBody(req), res);
+        if (req.method === 'POST' && pathname === '/auth/token/renew') {
+            const sessionCookie = getSessionCookie(req);
+            if (!sessionCookie || !verifySessionCookie(sessionCookie)) {
+                return sendJson(res, 401, { error: 'unauthorized' });
+            }
+            return await handleRenewToken(res);
         }
-        if (req.method === 'POST' && url.pathname === '/send') {
-            return await handleSend(await readBody(req), res);
-        }
-        if (req.method === 'POST' && url.pathname === '/join-group') {
-            return await handleJoinGroup(await readBody(req), res);
-        }
-        if (req.method === 'GET' && serveStatic(url.pathname, res)) {
+
+        // Static files du dashboard
+        if (req.method === 'GET' && serveStatic(pathname, res, req)) {
             return;
         }
+
         sendJson(res, 404, { error: 'not found' });
     } catch (e) {
         sendJson(res, 400, { error: e.message });
@@ -489,6 +612,7 @@ ipcServer.on('error', e => {
     if (e.code !== 'EADDRINUSE') console.error('[IPC]', e.message);
 });
 ipcServer.listen(IPC_PORT, '127.0.0.1', () => {
+    ensureBootstrapSecrets();
     console.log(`[IPC] HTTP server sur 127.0.0.1:${IPC_PORT}`);
 });
 

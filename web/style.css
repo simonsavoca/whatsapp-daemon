@@ -161,6 +161,29 @@ table.msg-table {
 }
 .btn-danger:hover { background: var(--danger); color: var(--text); }
 
+.btn-primary {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: var(--bg);
+  padding: 8px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+}
+.btn-primary:hover { opacity: 0.85; }
+
+.btn-secondary {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.btn-secondary:hover { border-color: var(--text); }
+
 .api-intro { color: var(--muted); font-size: 13px; margin: 0; }
 .api-intro code { color: var(--text); }
 

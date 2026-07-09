@@ -39,8 +39,24 @@ function getDb() {
             is_group INTEGER,
             updated_at TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
     `);
     return db;
 }
 
-module.exports = { getDb, DB_PATH, DATA_DIR };
+function getSetting(key) {
+    const db = getDb();
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+    return row ? row.value : null;
+}
+
+function setSetting(key, value) {
+    const db = getDb();
+    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value);
+}
+
+module.exports = { getDb, getSetting, setSetting, DB_PATH, DATA_DIR };

@@ -20,6 +20,10 @@ $$('.tab-btn').forEach(btn => {
 
 async function getJson(url) {
   const res = await fetch(url);
+  if (res.status === 401) {
+    window.location = '/login';
+    return {};
+  }
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
   return body;
@@ -40,6 +44,42 @@ function fmtDate(iso) {
 
 // --- Statut ------------------------------------------------------------
 
+function displayToken(token) {
+  const display = $('#st-token-display');
+  if (!token) {
+    display.textContent = '—';
+    return;
+  }
+  const tokenId = 'api-token-' + Math.random().toString(36).substr(2, 9);
+  display.innerHTML = `
+    <div style="display: flex; gap: 8px; align-items: center;">
+      <code id="${tokenId}" style="cursor: text; padding: 4px 8px; background: rgba(255,255,255,0.05); border-radius: 4px; user-select: all; font-size: 0.9em; word-break: break-all;">${token}</code>
+      <button onclick="copyTokenToClipboard('${tokenId}')" style="padding: 4px 10px; font-size: 0.85em; background: rgba(37,211,102,0.2); border: 1px solid #25d366; color: #25d366; border-radius: 4px; cursor: pointer;">Copier</button>
+    </div>
+  `;
+  // Add click-to-copy on the token itself
+  document.getElementById(tokenId).addEventListener('click', () => copyTokenToClipboard(tokenId));
+}
+
+function copyTokenToClipboard(elementId) {
+  const element = document.getElementById(elementId);
+  if (!element) return;
+
+  const token = element.textContent;
+  navigator.clipboard.writeText(token).then(() => {
+    const btn = event.target.closest('button') || element;
+    const originalText = btn.textContent;
+    btn.textContent = '✓ Copié';
+    setTimeout(() => {
+      if (btn.textContent === '✓ Copié') {
+        btn.textContent = originalText;
+      }
+    }, 2000);
+  }).catch(err => {
+    alert('Erreur lors de la copie: ' + err);
+  });
+}
+
 async function refreshStatus() {
   try {
     const s = await getJson('/auth/status');
@@ -54,6 +94,9 @@ async function refreshStatus() {
       ? '<span class="badge-read">connectée</span>'
       : `<span class="badge-unread">erreur${s.db?.error ? ' — ' + esc(s.db.error) : ''}</span>`;
     $('#st-updated').textContent = new Date().toLocaleTimeString('fr-FR');
+
+    window.currentApiToken = s.apiToken;
+    displayToken(s.apiToken);
 
     const dot = $('#live-dot');
     dot.className = 'dot ' + (s.connectionState === 'open' ? 'open' : s.connectionState === 'disconnected' ? 'disconnected' : '');
@@ -137,6 +180,33 @@ $('#btn-reset-db').addEventListener('click', async () => {
     alert(`Erreur lors du reset : ${e.message}`);
   } finally {
     btn.disabled = false;
+  }
+});
+
+$('#btn-renew-token').addEventListener('click', async () => {
+  if (!confirm("Renouveler le token API ? L'ancien token ne sera plus valide. N'oublie pas de mettre à jour WHATSAPP_DAEMON_TOKEN dans mcp-cowork/.env")) return;
+  const btn = $('#btn-renew-token');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/auth/token/renew', { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    window.currentApiToken = body.token;
+    displayToken(body.token);
+    alert('Token renouvelé avec succès');
+  } catch (e) {
+    alert(`Erreur lors du renouvellement : ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('#btn-logout').addEventListener('click', async () => {
+  try {
+    await fetch('/logout', { method: 'POST' });
+    window.location = '/login';
+  } catch (e) {
+    alert(`Erreur lors de la déconnexion : ${e.message}`);
   }
 });
 
