@@ -55,6 +55,24 @@ function messageTypeAndText(message) {
     return { type: 'other', text: '' };
 }
 
+// Remplace les mentions brutes `@<numéro>` (ex. @258144915706059) par `@<nom>` en
+// s'appuyant sur la table chats (annuaire jid→name). Non destructif : n'agit que sur
+// la valeur renvoyée, jamais en base. Un id non résolu est laissé tel quel.
+let mentionStmt = null;
+function resolveMentions(db, text) {
+    if (!text || !/@\d/.test(text)) return text;
+    if (!mentionStmt) mentionStmt = db.prepare('SELECT name FROM chats WHERE jid LIKE ? LIMIT 1');
+    const cache = new Map();
+    return text.replace(/@(\d+)/g, (whole, userpart) => {
+        if (!cache.has(userpart)) {
+            const row = mentionStmt.get(`${userpart}@%`);
+            cache.set(userpart, row?.name || null);
+        }
+        const name = cache.get(userpart);
+        return name ? `@${name}` : whole;
+    });
+}
+
 async function resolveName(sock, jid, pushName) {
     if (nameCache[jid]) return nameCache[jid];
     if (jid.endsWith('@g.us')) {
@@ -186,12 +204,14 @@ async function handleRecent(query, res) {
     } else {
         rows = db.prepare('SELECT * FROM messages ORDER BY timestamp DESC LIMIT ?').all(limit);
     }
+    for (const r of rows) r.text = resolveMentions(db, r.text);
     sendJson(res, 200, { messages: rows.reverse() });
 }
 
 async function handleUnread(res) {
     const db = getDb();
     const rows = db.prepare('SELECT * FROM messages WHERE read_at IS NULL ORDER BY timestamp ASC').all();
+    for (const r of rows) r.text = resolveMentions(db, r.text);
     sendJson(res, 200, { messages: rows });
 }
 
@@ -538,6 +558,7 @@ async function handleDbMessages(query, res) {
         total = db.prepare('SELECT COUNT(*) AS n FROM messages').get().n;
         rows = db.prepare('SELECT * FROM messages ORDER BY timestamp DESC LIMIT ? OFFSET ?').all(limit, offset);
     }
+    for (const r of rows) r.text = resolveMentions(db, r.text);
     sendJson(res, 200, { messages: rows, total });
 }
 
