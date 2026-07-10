@@ -38,7 +38,7 @@ const IPC_PORT = 3099;
 
 const nameCache = {};
 let currentSock = null;
-let connectionState = 'disconnected'; // 'disconnected' | 'connecting' | 'open'
+let connectionState = 'disconnected'; // 'disconnected' | 'connecting' | 'open' | 'logged_out'
 let lastUser = null;
 let latestQr = null; // data URL PNG du dernier QR émis, null si connecté ou pas encore généré
 let isResetting = false;
@@ -195,8 +195,26 @@ async function handleUnread(res) {
     sendJson(res, 200, { messages: rows });
 }
 
+// Distingue un compte WhatsApp a resynchroniser (401, il faut re-appairer via /auth/reset)
+// d'un daemon simplement pas encore connecte (503, transitoire — reessayer plus tard).
+// A ne pas confondre avec le 401 { error: 'unauthorized' } d'un mauvais token API.
+function requireConnected(res) {
+    if (connectionState === 'logged_out') {
+        sendJson(res, 401, {
+            error: 'whatsapp_logged_out',
+            message: 'Compte WhatsApp déconnecté — resynchronisation nécessaire (POST /auth/reset puis rescanner le QR code).',
+        });
+        return false;
+    }
+    if (!currentSock || connectionState !== 'open') {
+        sendJson(res, 503, { error: 'daemon not connected' });
+        return false;
+    }
+    return true;
+}
+
 async function handleMessagesRead(payload, res) {
-    if (!currentSock) return sendJson(res, 503, { error: 'daemon not connected' });
+    if (!requireConnected(res)) return;
     const db = getDb();
     let rows;
     if (payload.ids && payload.ids.length) {
@@ -257,7 +275,7 @@ async function handleSendToPhone(query, message, res) {
 }
 
 async function handleSend(payload, res) {
-    if (!currentSock) return sendJson(res, 503, { error: 'daemon not connected' });
+    if (!requireConnected(res)) return;
     const { query, message } = payload;
     if (!query || !message) return sendJson(res, 400, { error: 'query et message requis' });
 
@@ -289,7 +307,7 @@ async function handleSend(payload, res) {
 }
 
 async function handleJoinGroup(payload, res) {
-    if (!currentSock) return sendJson(res, 503, { error: 'daemon not connected' });
+    if (!requireConnected(res)) return;
     let inviteCode = null;
     try {
         inviteCode = payload.inviteLink.split('/').pop().split('?')[0];
@@ -661,12 +679,21 @@ async function connect() {
             } catch {}
         }
         if (connection === 'close') {
-            connectionState = 'disconnected';
             const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
             if (reason === DisconnectReason.loggedOut) {
-                console.error('Session revoquee — supprimer whatsapp_auth/ et relancer.');
-                process.exit(1);
+                // Session revoquee (deconnexion depuis le telephone) : les creds dans
+                // whatsapp_auth/ sont definitivement invalides, inutile de reessayer de se
+                // connecter avec. On reste up (le serveur IPC continue de repondre) plutot
+                // que de crasher — un restart PM2 rechargerait les memes creds mortes et
+                // boucierait indefiniment. Il faut passer par /auth/reset (ou le bouton
+                // "Reset" du dashboard) pour repartir avec un nouveau QR.
+                connectionState = 'logged_out';
+                currentSock = null;
+                latestQr = null;
+                console.error('Session WhatsApp revoquee — POST /auth/reset (ou bouton "Reset" du dashboard) pour re-appairer.');
+                return;
             }
+            connectionState = 'disconnected';
             connect();
         }
     });

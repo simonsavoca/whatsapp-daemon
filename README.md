@@ -55,3 +55,5 @@ Le serveur écoute en local uniquement sur `127.0.0.1:3099`. C'est le seul point
 | GET | `/db/chats?filter` | Liste des chats connus (utilisé par le dashboard) |
 | GET | `/db/messages?limit&offset&filter` | Messages paginés (utilisé par le dashboard) |
 | GET | `/` | Dashboard web en lecture seule |
+
+`/send`, `/join-group` et `/messages/read` renvoient `401 { error: 'whatsapp_logged_out' }` (à distinguer de `401 { error: 'unauthorized' }` pour un token API invalide) quand la session WhatsApp a été révoquée côté téléphone — il faut alors passer par `/auth/reset` pour re-appairer.
