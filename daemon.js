@@ -306,6 +306,58 @@ async function handleSend(payload, res) {
     }
 }
 
+// Archive/désarchive une conversation via l'app-state Baileys. chatModify exige le
+// dernier message du chat (lastMessages) — reconstruit depuis raw_key comme /messages/read.
+async function handleChatArchive(payload, res) {
+    if (!requireConnected(res)) return;
+    const { query } = payload;
+    const archive = payload.archive !== false;
+    if (!query) return sendJson(res, 400, { error: 'query requis' });
+
+    const db = getDb();
+    let matches;
+    if (query.includes('@')) {
+        // jid exact — permet de lever une ambiguïté 409 en repassant le jid retourné
+        matches = db.prepare('SELECT jid, name, is_group FROM chats WHERE jid = ?').all(query);
+    } else {
+        const kw = `%${query.toLowerCase()}%`;
+        matches = db.prepare('SELECT jid, name, is_group FROM chats WHERE LOWER(name) LIKE ?').all(kw);
+    }
+
+    if (!matches.length) {
+        return sendJson(res, 404, { error: `Aucun contact/groupe correspondant à "${query}".` });
+    }
+    if (matches.length > 1) {
+        return sendJson(res, 409, {
+            error: `Plusieurs correspondances pour "${query}".`,
+            matches: matches.map(m => ({ name: m.name, jid: m.jid, isGroup: !!m.is_group })),
+        });
+    }
+
+    const [target] = matches;
+    const row = db.prepare(
+        'SELECT raw_key, timestamp FROM messages WHERE jid = ? AND raw_key IS NOT NULL ORDER BY timestamp DESC LIMIT 1'
+    ).get(target.jid);
+    if (!row) {
+        return sendJson(res, 404, { error: `Aucun message en base pour "${target.name}" — impossible d'archiver.` });
+    }
+
+    const lastMessages = [{
+        key: JSON.parse(row.raw_key),
+        messageTimestamp: Math.floor(Date.parse(row.timestamp) / 1000),
+    }];
+    try {
+        await currentSock.chatModify({ archive, lastMessages }, target.jid);
+        sendJson(res, 200, {
+            ok: true,
+            msg: `Conversation "${target.name}" ${archive ? 'archivée' : 'désarchivée'}`,
+            jid: target.jid,
+        });
+    } catch (e) {
+        sendJson(res, 500, { error: e.message });
+    }
+}
+
 async function handleJoinGroup(payload, res) {
     if (!requireConnected(res)) return;
     let inviteCode = null;
@@ -565,6 +617,11 @@ const ipcServer = http.createServer(async (req, res) => {
             if (!checkBearer(req)) return sendJson(res, 401, { error: 'unauthorized' });
             const body = await readBody(req);
             return await handleJoinGroup(body, res);
+        }
+        if (req.method === 'POST' && pathname === '/chat/archive') {
+            if (!checkBearer(req)) return sendJson(res, 401, { error: 'unauthorized' });
+            const body = await readBody(req);
+            return await handleChatArchive(body, res);
         }
         if (req.method === 'GET' && pathname === '/auth/status') {
             if (!checkBearer(req) && (!getSessionCookie(req) || !verifySessionCookie(getSessionCookie(req)))) {

@@ -162,6 +162,16 @@
         <p><strong>Réponse</strong></p>
         <pre><code>{ "ok": true, "jid": "..." }</code></pre>
       </details>
+
+      <details class="api-route">
+        <summary><span class="method post">POST</span> /chat/archive</summary>
+        <p><strong>Visible sur WhatsApp mobile (réversible)</strong> — archive ou désarchive une conversation recherchée par nom (sous-chaîne, insensible à la casse) ou par jid exact. <code>archive</code> optionnel (défaut <code>true</code>, <code>false</code> pour désarchiver).</p>
+        <p><strong>Corps</strong></p>
+        <pre><code>{ "query": "Virginie" }  // ou : { "query": "...@s.whatsapp.net", "archive": false }</code></pre>
+        <p><strong>Réponse</strong></p>
+        <pre><code>{ "ok": true, "msg": "Conversation \"Virginie\" archivée", "jid": "..." }
+// 409 si plusieurs correspondances : { "error": "...", "matches": [{ "name", "jid", "isGroup" }] }</code></pre>
+      </details>
     </div>
 
     <div class="card">
