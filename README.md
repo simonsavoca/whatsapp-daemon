@@ -60,3 +60,12 @@ Le serveur écoute en local uniquement sur `127.0.0.1:3099`. C'est le seul point
 `/send`, `/join-group`, `/chat/archive` et `/messages/read` renvoient `401 { error: 'whatsapp_logged_out' }` (à distinguer de `401 { error: 'unauthorized' }` pour un token API invalide) quand la session WhatsApp a été révoquée côté téléphone — il faut alors passer par `/auth/reset` pour re-appairer.
 
 Dans les réponses `messages` (`/messages/recent`, `/messages/unread`, `/db/messages`), les mentions brutes `@<numéro>` sont résolues en `@<nom du contact>` à la volée via la table `chats` (le texte stocké en base reste inchangé). Un numéro inconnu est laissé tel quel.
+
+## Tests
+
+```bash
+npm run lint   # eslint
+npm test       # tests unitaires (node --test)
+```
+
+La CI GitHub Actions (`.github/workflows/ci.yml`) exécute lint + tests sur chaque push et pull request.

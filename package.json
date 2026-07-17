@@ -4,8 +4,13 @@
   "description": "Daemon WhatsApp autonome (Baileys) exposant une API HTTP locale sur 127.0.0.1:3099",
   "main": "daemon.js",
   "type": "commonjs",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
-    "start": "node daemon.js"
+    "start": "node daemon.js",
+    "test": "node --test",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@hapi/boom": "^10.0.0",
@@ -14,5 +19,10 @@
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
     "swagger-ui-dist": "^5.32.8"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.9.0",
+    "eslint": "^9.9.0",
+    "globals": "^17.7.0"
   }
 }
