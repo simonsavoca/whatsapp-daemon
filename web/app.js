@@ -13,8 +13,24 @@ $$('.tab-btn').forEach(btn => {
     $$('.tab-pane').forEach(p => p.classList.remove('active'));
     btn.classList.add('active');
     $(`#tab-${btn.dataset.tab}`).classList.add('active');
+    if (btn.dataset.tab === 'api') initSwaggerUi();
   });
 });
+
+// --- Guide API (Swagger UI) ------------------------------------------------
+// Chargé à la demande (premier clic sur l'onglet) plutôt qu'au démarrage de la page.
+
+let swaggerUiLoaded = false;
+function initSwaggerUi() {
+  if (swaggerUiLoaded) return;
+  swaggerUiLoaded = true;
+  window.SwaggerUIBundle({
+    url: '/openapi.json',
+    domNode: document.getElementById('swagger-ui'),
+    presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+    layout: 'StandaloneLayout',
+  });
+}
 
 // --- Helpers ---------------------------------------------------------------
 
@@ -46,6 +62,7 @@ function fmtDate(iso) {
 
 function displayToken(token) {
   const display = $('#st-token-display');
+  $('#btn-show-token').hidden = true;
   if (!token) {
     display.textContent = '—';
     return;
@@ -94,9 +111,6 @@ async function refreshStatus() {
       ? '<span class="badge-read">connectée</span>'
       : `<span class="badge-unread">erreur${s.db?.error ? ' — ' + esc(s.db.error) : ''}</span>`;
     $('#st-updated').textContent = new Date().toLocaleTimeString('fr-FR');
-
-    window.currentApiToken = s.apiToken;
-    displayToken(s.apiToken);
 
     const dot = $('#live-dot');
     dot.className = 'dot ' + (s.connectionState === 'open' ? 'open' : s.connectionState === 'disconnected' ? 'disconnected' : '');
@@ -178,6 +192,19 @@ $('#btn-reset-db').addEventListener('click', async () => {
     refreshDbMessages();
   } catch (e) {
     alert(`Erreur lors du reset : ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('#btn-show-token').addEventListener('click', async () => {
+  const btn = $('#btn-show-token');
+  btn.disabled = true;
+  try {
+    const { token } = await getJson('/auth/token');
+    displayToken(token);
+  } catch (e) {
+    alert(`Erreur : ${e.message}`);
   } finally {
     btn.disabled = false;
   }

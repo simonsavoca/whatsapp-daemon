@@ -184,42 +184,9 @@ table.msg-table {
 }
 .btn-secondary:hover { border-color: var(--text); }
 
-.api-intro { color: var(--muted); font-size: 13px; margin: 0; }
-.api-intro code { color: var(--text); }
-
-.api-route {
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border);
-}
-.api-route:last-child { border-bottom: none; }
-.api-route summary {
-  cursor: pointer;
-  font-size: 14px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.api-route p { color: var(--muted); font-size: 13px; margin: 10px 0 4px; }
-.api-route p strong { color: var(--text); }
-.api-route pre {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 10px 12px;
+.swagger-container {
+  background: #fff;
+  border-radius: 8px;
+  padding: 10px;
   overflow-x: auto;
-  font-size: 12px;
-  margin: 4px 0 0;
 }
-
-.method {
-  display: inline-block;
-  min-width: 42px;
-  text-align: center;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .03em;
-}
-.method.get { background: rgba(37, 211, 102, .15); color: var(--accent); }
-.method.post { background: rgba(79, 142, 247, .15); color: #4f8ef7; }

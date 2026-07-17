@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Daemon WhatsApp — Contrôle</title>
 <link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/vendor/swagger-ui/swagger-ui.css">
 </head>
 <body>
 <header>
@@ -40,7 +41,7 @@
         <dt>Compte</dt><dd id="st-user">—</dd>
         <dt>Base de données</dt><dd id="st-db">—</dd>
         <dt>Dernière mise à jour</dt><dd id="st-updated">—</dd>
-        <dt>Token API</dt><dd id="st-token-display">—</dd>
+        <dt>Token API</dt><dd><button id="btn-show-token" class="btn-secondary">Afficher</button><span id="st-token-display"></span></dd>
       </dl>
 
       <div id="qr-block" class="qr-block" hidden>
@@ -109,126 +110,13 @@
   </section>
 
   <section id="tab-api" class="tab-pane">
-    <div class="card">
-      <p class="api-intro">
-        API HTTP interne du daemon, servie en local sur <code>127.0.0.1:3099</code> (non exposée à l'extérieur).
-        Consommée par les applications clientes du daemon et par ce dashboard.
-      </p>
-    </div>
-
-    <div class="card">
-      <h2>Authentification</h2>
-
-      <details class="api-route">
-        <summary><span class="method get">GET</span> /auth/status</summary>
-        <p>État de la connexion WhatsApp et du compte lié.</p>
-        <p><strong>Réponse</strong></p>
-        <pre><code>{ "connectionState": "open", "user": { "name": "...", "id": "..." }, "messageCount": 123, "unreadCount": 4, "readCount": 119, "chatsCount": 89, "activeChatsCount": 12 }</code></pre>
-      </details>
-
-      <details class="api-route">
-        <summary><span class="method get">GET</span> /auth/qr</summary>
-        <p>Dernier QR code d'authentification (data URL PNG), ou <code>null</code> si déjà connecté ou pas encore généré.</p>
-        <p><strong>Réponse</strong></p>
-        <pre><code>{ "qr": "data:image/png;base64,...", "connectionState": "connecting" }</code></pre>
-      </details>
-
-      <details class="api-route">
-        <summary><span class="method post">POST</span> /auth/reset</summary>
-        <p><strong>Destructif</strong> — supprime la session WhatsApp en cours, vide la base (<code>messages</code>/<code>chats</code>) et redémarre la connexion pour générer un nouveau QR à scanner.</p>
-        <p><strong>Réponse</strong></p>
-        <pre><code>{ "ok": true }</code></pre>
-      </details>
-    </div>
-
-    <div class="card">
-      <h2>Envoi &amp; groupes</h2>
-
-      <details class="api-route">
-        <summary><span class="method post">POST</span> /send</summary>
-        <p><strong>Visible sur WhatsApp mobile</strong> — envoie un message à un contact/groupe recherché par nom (sous-chaîne, insensible à la casse).</p>
-        <p><strong>Corps</strong></p>
-        <pre><code>{ "query": "Virginie", "message": "Coucou" }</code></pre>
-        <p><strong>Réponse</strong></p>
-        <pre><code>{ "ok": true, "msg": "Message envoyé à \"Virginie\"", "jid": "..." }
-// 409 si plusieurs correspondances : { "error": "...", "matches": [{ "name", "jid", "isGroup" }] }</code></pre>
-      </details>
-
-      <details class="api-route">
-        <summary><span class="method post">POST</span> /join-group</summary>
-        <p>Rejoint un groupe WhatsApp via un lien d'invitation.</p>
-        <p><strong>Corps</strong></p>
-        <pre><code>{ "inviteLink": "https://chat.whatsapp.com/CODE" }</code></pre>
-        <p><strong>Réponse</strong></p>
-        <pre><code>{ "ok": true, "jid": "..." }</code></pre>
-      </details>
-
-      <details class="api-route">
-        <summary><span class="method post">POST</span> /chat/archive</summary>
-        <p><strong>Visible sur WhatsApp mobile (réversible)</strong> — archive ou désarchive une conversation recherchée par nom (sous-chaîne, insensible à la casse) ou par jid exact. <code>archive</code> optionnel (défaut <code>true</code>, <code>false</code> pour désarchiver).</p>
-        <p><strong>Corps</strong></p>
-        <pre><code>{ "query": "Virginie" }  // ou : { "query": "...@s.whatsapp.net", "archive": false }</code></pre>
-        <p><strong>Réponse</strong></p>
-        <pre><code>{ "ok": true, "msg": "Conversation \"Virginie\" archivée", "jid": "..." }
-// 409 si plusieurs correspondances : { "error": "...", "matches": [{ "name", "jid", "isGroup" }] }</code></pre>
-      </details>
-    </div>
-
-    <div class="card">
-      <h2>Messages</h2>
-
-      <details class="api-route">
-        <summary><span class="method get">GET</span> /messages/recent?limit&amp;filter</summary>
-        <p>Derniers messages capturés par le daemon. <code>limit</code> (défaut 20) et <code>filter</code> (nom du chat ou texte) optionnels.</p>
-        <p><strong>Réponse</strong></p>
-        <pre><code>{ "messages": [ { "id", "chat_name", "text", "timestamp", "read_at", ... } ] }</code></pre>
-      </details>
-
-      <details class="api-route">
-        <summary><span class="method get">GET</span> /messages/unread</summary>
-        <p>Messages non lus (basé sur <code>read_at</code> en base).</p>
-        <p><strong>Réponse</strong></p>
-        <pre><code>{ "messages": [ ... ] }</code></pre>
-      </details>
-
-      <details class="api-route">
-        <summary><span class="method post">POST</span> /messages/read</summary>
-        <p><strong>Irréversible</strong> — marque des messages comme lus (ticks bleus, visible sur tous les appareils). Passer <code>ids</code> pour ne marquer que des messages précis, sinon <code>upTo</code> marque tout jusqu'à ce timestamp (défaut : maintenant).</p>
-        <p><strong>Corps</strong></p>
-        <pre><code>{ "ids": [12, 13] }  // ou : { "upTo": "2026-07-05T10:00:00.000Z" }</code></pre>
-        <p><strong>Réponse</strong></p>
-        <pre><code>{ "ok": true, "count": 2 }</code></pre>
-      </details>
-    </div>
-
-    <div class="card">
-      <h2>Base de données</h2>
-
-      <details class="api-route">
-        <summary><span class="method get">GET</span> /db/chats?filter</summary>
-        <p>Table <code>chats</code>, triée par dernière mise à jour. <code>filter</code> optionnel (nom).</p>
-        <p><strong>Réponse</strong></p>
-        <pre><code>{ "chats": [ { "jid", "name", "is_group", "updated_at" } ] }</code></pre>
-      </details>
-
-      <details class="api-route">
-        <summary><span class="method get">GET</span> /db/messages?limit&amp;offset&amp;filter</summary>
-        <p>Table <code>messages</code> paginée (<code>limit</code> défaut 50, <code>offset</code> défaut 0). <code>filter</code> optionnel (nom du chat ou texte).</p>
-        <p><strong>Réponse</strong></p>
-        <pre><code>{ "messages": [ ... ], "total": 431 }</code></pre>
-      </details>
-
-      <details class="api-route">
-        <summary><span class="method post">POST</span> /db/reset</summary>
-        <p><strong>Destructif</strong> — vide les tables <code>messages</code> et <code>chats</code> (le fichier whatsapp.db et son schéma sont conservés). N'affecte pas la session WhatsApp authentifiée.</p>
-        <p><strong>Réponse</strong></p>
-        <pre><code>{ "ok": true }</code></pre>
-      </details>
-    </div>
+    <div id="swagger-ui" class="swagger-container"></div>
   </section>
 
 </main>
 
+<script src="/vendor/swagger-ui/swagger-ui-bundle.js"></script>
+<script src="/vendor/swagger-ui/swagger-ui-standalone-preset.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

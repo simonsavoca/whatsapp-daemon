@@ -34,6 +34,12 @@ const {
 const DATA_DIR = path.join(__dirname, 'data');
 const AUTH_DIR = path.join(DATA_DIR, 'whatsapp_auth');
 const WEB_DIR = path.join(__dirname, 'web');
+const SWAGGER_UI_DIR = require('swagger-ui-dist').getAbsoluteFSPath();
+const SWAGGER_UI_FILES = {
+    'swagger-ui.css': 'text/css; charset=utf-8',
+    'swagger-ui-bundle.js': 'application/javascript; charset=utf-8',
+    'swagger-ui-standalone-preset.js': 'application/javascript; charset=utf-8',
+};
 const IPC_PORT = 3099;
 
 const nameCache = {};
@@ -433,6 +439,12 @@ async function handleLogout(res) {
     res.end(JSON.stringify({ ok: true }));
 }
 
+// Révélation à la demande du token API — volontairement séparé de /auth/status (qui est
+// pollé toutes les 5s par le dashboard) pour ne pas retransmettre le secret en continu.
+async function handleAuthToken(res) {
+    sendJson(res, 200, { token: getSetting('api_token') });
+}
+
 async function handleRenewToken(res) {
     try {
         const token = renewApiToken();
@@ -464,7 +476,6 @@ async function handleAuthStatus(res) {
         readCount: count != null && unreadCount != null ? count - unreadCount : null,
         chatsCount,
         activeChatsCount,
-        apiToken: getSetting('api_token'),
         db,
     });
 }
@@ -567,8 +578,32 @@ const STATIC_FILES = {
     '/index.html': { file: 'index.html', type: 'text/html; charset=utf-8', requireSession: true },
     '/app.js': { file: 'app.js', type: 'application/javascript; charset=utf-8', requireSession: true },
     '/style.css': { file: 'style.css', type: 'text/css; charset=utf-8', requireSession: true },
+    '/openapi.json': { file: 'openapi.json', type: 'application/json; charset=utf-8', requireSession: true },
     '/login': { file: 'login.html', type: 'text/html; charset=utf-8', public: true },
 };
+
+// Assets Swagger UI (vendorés depuis node_modules/swagger-ui-dist), servis derrière la même
+// session que le reste du dashboard — whitelist stricte de noms de fichiers, pas de path traversal.
+function serveSwaggerUiAsset(pathname, res, req) {
+    if (!pathname.startsWith('/vendor/swagger-ui/')) return false;
+    const file = pathname.slice('/vendor/swagger-ui/'.length);
+    const type = SWAGGER_UI_FILES[file];
+    if (!type) return false;
+
+    const sessionCookie = getSessionCookie(req);
+    if (!sessionCookie || !verifySessionCookie(sessionCookie)) {
+        res.writeHead(302, { Location: '/login' });
+        res.end();
+        return true;
+    }
+
+    fs.readFile(path.join(SWAGGER_UI_DIR, file), (err, data) => {
+        if (err) return sendJson(res, 500, { error: err.message });
+        res.writeHead(200, { 'Content-Type': type });
+        res.end(data);
+    });
+    return true;
+}
 
 function serveStatic(pathname, res, req) {
     const entry = STATIC_FILES[pathname];
@@ -686,6 +721,13 @@ const ipcServer = http.createServer(async (req, res) => {
             }
             return await handleDbMessages(Object.fromEntries(url.searchParams), res);
         }
+        if (req.method === 'GET' && pathname === '/auth/token') {
+            const sessionCookie = getSessionCookie(req);
+            if (!sessionCookie || !verifySessionCookie(sessionCookie)) {
+                return sendJson(res, 401, { error: 'unauthorized' });
+            }
+            return await handleAuthToken(res);
+        }
         if (req.method === 'POST' && pathname === '/auth/token/renew') {
             const sessionCookie = getSessionCookie(req);
             if (!sessionCookie || !verifySessionCookie(sessionCookie)) {
@@ -696,6 +738,9 @@ const ipcServer = http.createServer(async (req, res) => {
 
         // Static files du dashboard
         if (req.method === 'GET' && serveStatic(pathname, res, req)) {
+            return;
+        }
+        if (req.method === 'GET' && serveSwaggerUiAsset(pathname, res, req)) {
             return;
         }
 

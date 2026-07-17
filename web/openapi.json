@@ -1,0 +1,327 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Daemon WhatsApp — API interne",
+    "version": "1.0.0",
+    "description": "API HTTP interne du daemon, servie en local sur `127.0.0.1:3099` (non exposée à l'extérieur). Consommée par les applications clientes du daemon et par ce dashboard.\n\nDeux modes d'authentification :\n- **Bearer token** (`Authorization: Bearer <token>`) — pour les applications clientes.\n- **Cookie de session** (`sid`, posé par `POST /login`) — pour ce dashboard."
+  },
+  "servers": [
+    { "url": "http://127.0.0.1:3099" }
+  ],
+  "tags": [
+    { "name": "Authentification", "description": "Connexion WhatsApp (QR) et authentification au dashboard" },
+    { "name": "Envoi & groupes", "description": "Actions visibles côté WhatsApp mobile" },
+    { "name": "Messages", "description": "Lecture et gestion des messages capturés" },
+    { "name": "Base de données", "description": "Accès brut aux tables du dashboard (lecture seule + reset)" }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer", "description": "Token API généré au bootstrap ou via /auth/token/renew" },
+      "cookieAuth": { "type": "apiKey", "in": "cookie", "name": "sid", "description": "Cookie de session posé par POST /login" }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": { "error": { "type": "string" } }
+      },
+      "ChatMatch": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "jid": { "type": "string" },
+          "isGroup": { "type": "boolean" }
+        }
+      },
+      "AmbiguousMatch": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" },
+          "matches": { "type": "array", "items": { "$ref": "#/components/schemas/ChatMatch" } }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "wa_id": { "type": "string", "nullable": true },
+          "jid": { "type": "string" },
+          "chat_name": { "type": "string" },
+          "sender": { "type": "string" },
+          "message_type": { "type": "string", "example": "text" },
+          "text": { "type": "string" },
+          "from_me": { "type": "integer", "enum": [0, 1] },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "read_at": { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "Chat": {
+        "type": "object",
+        "properties": {
+          "jid": { "type": "string" },
+          "name": { "type": "string" },
+          "is_group": { "type": "integer", "enum": [0, 1] },
+          "updated_at": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/login": {
+      "post": {
+        "tags": ["Authentification"],
+        "summary": "Connexion au dashboard",
+        "description": "Vérifie le mot de passe et pose un cookie de session `sid` (HttpOnly).",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["password"], "properties": { "password": { "type": "string" } } } } }
+        },
+        "responses": {
+          "200": { "description": "Connecté", "content": { "application/json": { "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } } } } },
+          "401": { "description": "Mot de passe invalide", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/logout": {
+      "post": {
+        "tags": ["Authentification"],
+        "summary": "Déconnexion du dashboard",
+        "description": "Supprime le cookie de session.",
+        "responses": {
+          "200": { "description": "Déconnecté", "content": { "application/json": { "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } } } } }
+        }
+      }
+    },
+    "/auth/status": {
+      "get": {
+        "tags": ["Authentification"],
+        "summary": "État de la connexion WhatsApp",
+        "description": "État de la connexion WhatsApp et du compte lié.",
+        "security": [{ "bearerAuth": [] }, { "cookieAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": { "application/json": { "schema": { "type": "object", "properties": {
+              "connectionState": { "type": "string", "enum": ["disconnected", "connecting", "open", "logged_out"] },
+              "user": { "type": "object", "nullable": true, "properties": { "name": { "type": "string" }, "id": { "type": "string" } } },
+              "messageCount": { "type": "integer", "nullable": true },
+              "unreadCount": { "type": "integer", "nullable": true },
+              "readCount": { "type": "integer", "nullable": true },
+              "chatsCount": { "type": "integer", "nullable": true },
+              "activeChatsCount": { "type": "integer", "nullable": true },
+              "db": { "type": "object", "properties": { "connected": { "type": "boolean" }, "error": { "type": "string", "nullable": true } } }
+            } } } }
+          },
+          "401": { "description": "Non authentifié", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/auth/qr": {
+      "get": {
+        "tags": ["Authentification"],
+        "summary": "QR code d'authentification",
+        "description": "Dernier QR code d'authentification (data URL PNG), ou `null` si déjà connecté ou pas encore généré.",
+        "security": [{ "cookieAuth": [] }],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": {
+            "qr": { "type": "string", "nullable": true, "example": "data:image/png;base64,..." },
+            "connectionState": { "type": "string" }
+          } } } } },
+          "401": { "description": "Non authentifié", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/auth/reset": {
+      "post": {
+        "tags": ["Authentification"],
+        "summary": "Réinitialiser l'authentification WhatsApp",
+        "description": "**Destructif** — supprime la session WhatsApp en cours, vide la base (`messages`/`chats`) et redémarre la connexion pour générer un nouveau QR à scanner.",
+        "security": [{ "bearerAuth": [] }, { "cookieAuth": [] }],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } } } } },
+          "401": { "description": "Non authentifié", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "409": { "description": "Reset déjà en cours", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/auth/token": {
+      "get": {
+        "tags": ["Authentification"],
+        "summary": "Révéler le token API",
+        "description": "Retourne le token API Bearer courant. Séparé de `/auth/status` (interrogé en continu par le dashboard) pour ne pas retransmettre le secret à chaque poll — à n'appeler qu'à la demande explicite de l'utilisateur.",
+        "security": [{ "cookieAuth": [] }],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "token": { "type": "string" } } } } } },
+          "401": { "description": "Non authentifié", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/auth/token/renew": {
+      "post": {
+        "tags": ["Authentification"],
+        "summary": "Renouveler le token API",
+        "description": "Génère un nouveau token API Bearer et invalide l'ancien.",
+        "security": [{ "cookieAuth": [] }],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "token": { "type": "string" } } } } } },
+          "401": { "description": "Non authentifié", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/send": {
+      "post": {
+        "tags": ["Envoi & groupes"],
+        "summary": "Envoyer un message",
+        "description": "**Visible sur WhatsApp mobile** — envoie un message à un contact/groupe recherché par nom (sous-chaîne, insensible à la casse) ou par numéro de téléphone.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["query", "message"], "properties": {
+            "query": { "type": "string", "example": "Virginie" },
+            "message": { "type": "string", "example": "Coucou" }
+          } } } }
+        },
+        "responses": {
+          "200": { "description": "Envoyé", "content": { "application/json": { "schema": { "type": "object", "properties": { "ok": { "type": "boolean" }, "msg": { "type": "string" }, "jid": { "type": "string" } } } } } },
+          "400": { "description": "query/message manquant", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "401": { "description": "Non authentifié", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Aucune correspondance", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "409": { "description": "Plusieurs correspondances", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AmbiguousMatch" } } } },
+          "503": { "description": "Daemon non connecté", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/join-group": {
+      "post": {
+        "tags": ["Envoi & groupes"],
+        "summary": "Rejoindre un groupe",
+        "description": "Rejoint un groupe WhatsApp via un lien d'invitation.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["inviteLink"], "properties": {
+            "inviteLink": { "type": "string", "example": "https://chat.whatsapp.com/CODE" }
+          } } } }
+        },
+        "responses": {
+          "200": { "description": "Groupe rejoint", "content": { "application/json": { "schema": { "type": "object", "properties": { "ok": { "type": "boolean" }, "jid": { "type": "string" } } } } } },
+          "401": { "description": "Non authentifié", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "500": { "description": "Échec (voir errorType)", "content": { "application/json": { "schema": { "type": "object", "properties": { "error": { "type": "string" }, "errorType": { "type": "string", "enum": ["unknown", "already-member", "pending-approval", "already-exists"] } } } } } }
+        }
+      }
+    },
+    "/chat/archive": {
+      "post": {
+        "tags": ["Envoi & groupes"],
+        "summary": "Archiver / désarchiver une conversation",
+        "description": "**Visible sur WhatsApp mobile (réversible)** — archive ou désarchive une conversation recherchée par nom (sous-chaîne, insensible à la casse) ou par jid exact. `archive` optionnel (défaut `true`, `false` pour désarchiver).",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["query"], "properties": {
+            "query": { "type": "string", "example": "Virginie" },
+            "archive": { "type": "boolean", "default": true }
+          } } } }
+        },
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "ok": { "type": "boolean" }, "msg": { "type": "string" }, "jid": { "type": "string" } } } } } },
+          "400": { "description": "query manquant", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "401": { "description": "Non authentifié", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Aucune correspondance", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "409": { "description": "Plusieurs correspondances", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AmbiguousMatch" } } } },
+          "503": { "description": "Daemon non connecté", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/messages/recent": {
+      "get": {
+        "tags": ["Messages"],
+        "summary": "Derniers messages",
+        "description": "Derniers messages capturés par le daemon.",
+        "security": [{ "bearerAuth": [] }, { "cookieAuth": [] }],
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } },
+          { "name": "filter", "in": "query", "schema": { "type": "string" }, "description": "nom du chat ou texte" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "messages": { "type": "array", "items": { "$ref": "#/components/schemas/Message" } } } } } } },
+          "401": { "description": "Non authentifié", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/messages/unread": {
+      "get": {
+        "tags": ["Messages"],
+        "summary": "Messages non lus",
+        "description": "Messages non lus (basé sur `read_at` en base).",
+        "security": [{ "bearerAuth": [] }, { "cookieAuth": [] }],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "messages": { "type": "array", "items": { "$ref": "#/components/schemas/Message" } } } } } } },
+          "401": { "description": "Non authentifié", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/messages/read": {
+      "post": {
+        "tags": ["Messages"],
+        "summary": "Marquer des messages comme lus",
+        "description": "**Irréversible** — marque des messages comme lus (ticks bleus, visible sur tous les appareils). Passer `ids` pour ne marquer que des messages précis, sinon `upTo` marque tout jusqu'à ce timestamp (défaut : maintenant).",
+        "security": [{ "bearerAuth": [] }, { "cookieAuth": [] }],
+        "requestBody": {
+          "content": { "application/json": { "schema": { "type": "object", "properties": {
+            "ids": { "type": "array", "items": { "type": "integer" }, "example": [12, 13] },
+            "upTo": { "type": "string", "format": "date-time", "example": "2026-07-05T10:00:00.000Z" }
+          } } } }
+        },
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "ok": { "type": "boolean" }, "count": { "type": "integer" } } } } } },
+          "401": { "description": "Non authentifié", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "503": { "description": "Daemon non connecté", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/db/chats": {
+      "get": {
+        "tags": ["Base de données"],
+        "summary": "Table chats",
+        "description": "Table `chats`, triée par dernière mise à jour.",
+        "security": [{ "cookieAuth": [] }],
+        "parameters": [
+          { "name": "filter", "in": "query", "schema": { "type": "string" }, "description": "nom" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "chats": { "type": "array", "items": { "$ref": "#/components/schemas/Chat" } } } } } } },
+          "401": { "description": "Non authentifié", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/db/messages": {
+      "get": {
+        "tags": ["Base de données"],
+        "summary": "Table messages (paginée)",
+        "description": "Table `messages` paginée.",
+        "security": [{ "cookieAuth": [] }],
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 50 } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0 } },
+          { "name": "filter", "in": "query", "schema": { "type": "string" }, "description": "nom du chat ou texte" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "messages": { "type": "array", "items": { "$ref": "#/components/schemas/Message" } }, "total": { "type": "integer" } } } } } },
+          "401": { "description": "Non authentifié", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/db/reset": {
+      "post": {
+        "tags": ["Base de données"],
+        "summary": "Vider la base de données",
+        "description": "**Destructif** — vide les tables `messages` et `chats` (le fichier whatsapp.db et son schéma sont conservés). N'affecte pas la session WhatsApp authentifiée.",
+        "security": [{ "cookieAuth": [] }],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } } } } },
+          "401": { "description": "Non authentifié", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    }
+  }
+}
